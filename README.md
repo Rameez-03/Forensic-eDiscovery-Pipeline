@@ -110,12 +110,6 @@ Checking the pipeline against real data, instead of just trusting the parsed out
 
 **A Bcc/Cc duplication artefact.** 2,533 of the 10,076 emails have something in the `Bcc` field, which is unusually high since blind copies are meant to be hidden. Checking the raw header (visible in the screenshot above, document ID 5) showed the `Bcc` value is identical to the `Cc` value on these records. It's not a real blind copy. It's an artefact of how this corpus was originally exported from the custodians' Lotus Notes mailboxes. That's exactly the sort of thing you have to catch before trusting a field for a privilege or relevance decision.
 
-### Interview talking points
-
-"I built an ingestion pipeline that parses raw RFC 822/MIME email files, extracts forensically relevant metadata, hashes every file before any processing touches it, and writes an automatic chain of custody log, the same hash first discipline platforms like Relativity and Nuix enforce during collection."
-
-"While checking my own pipeline against real data, I found that around a quarter of the Bcc fields in this corpus were actually just duplicating the Cc field, because of how the data was originally exported. It taught me that extracted metadata has to be checked against the raw source, not trusted just because a parser produced it."
-
 ---
 
 ## Tech Stack
