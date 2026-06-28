@@ -1,0 +1,24 @@
+# Raw evidence data - the Enron corpus subset is large, publicly downloadable,
+# and not original work. Re-create it by following README.md "How to Run".
+data/raw/
+
+# Generated forensic database - derived data, regenerate with:
+#   python -m ingestion.email_parser
+forensic.db
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp
