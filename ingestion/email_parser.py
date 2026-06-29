@@ -39,6 +39,9 @@ def compute_md5(file_path: Path) -> str:
             md5.update(chunk)
     return md5.hexdigest()
 
+def get_file_size(file_path: Path) -> int:
+    return file_path.stat().st_size
+
 
 def extract_custodian(file_path: Path) -> str:
     relative = file_path.relative_to(RAW_DATA_DIR)
@@ -129,6 +132,7 @@ def parse_eml_file(file_path: Path) -> dict:
         "custodian": extract_custodian(file_path),
         "file_path": str(file_path.relative_to(REPO_ROOT)).replace("\\", "/"),
         "file_hash_md5": file_hash,
+        "file_size_bytes": get_file_size(file_path),
         "date_sent": parse_date(msg.get("Date")),
         "date_received": parse_received_date(msg),
         "sender": sender,
