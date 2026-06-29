@@ -27,7 +27,7 @@ For this build I extracted two custodians from the full corpus:
 |---|---|---|
 | 0 | Concepts and glossary | Complete |
 | 1 | Ingestion and metadata extraction | Complete |
-| 2 | Deduplication | Planned |
+| 2 | Deduplication | Complete |
 | 3 | Email threading | Planned |
 | 4 | Keyword search | Planned |
 | 5 | Privilege detection | Planned |
@@ -109,6 +109,54 @@ Checking the pipeline against real data, instead of just trusting the parsed out
 **A broken date header.** One email's raw `Date` header reads "Mon, 31 Dec 1979 16:00:00 -0800", which is almost certainly a typo for 1999. It's a real example of why date range filtering in e-discovery can never be applied blindly. A single bad timestamp could pull a document outside an agreed relevance window, or wrongly exclude one that belongs inside it.
 
 **A Bcc/Cc duplication artefact.** 2,533 of the 10,076 emails have something in the `Bcc` field, which is unusually high since blind copies are meant to be hidden. Checking the raw header (visible in the screenshot above, document ID 5) showed the `Bcc` value is identical to the `Cc` value on these records. It's not a real blind copy. It's an artefact of how this corpus was originally exported from the custodians' Lotus Notes mailboxes. That's exactly the sort of thing you have to catch before trusting a field for a privilege or relevance decision.
+
+---
+
+## Module 2: Deduplication
+
+### What it does
+
+Module 2 reads `forensic.db` and flags duplicates two different ways, in [`analysis/deduplication.py`](analysis/deduplication.py):
+
+1. Exact duplicates. Documents are grouped by `(custodian, file_hash_md5)`. Within each group the first ingested copy is kept, every other copy in that group is flagged `is_duplicate = 1`.
+2. Near duplicates. For the documents that survive step one, body text is compared within each custodian using `rapidfuzz`. Anything scoring 85 or above on similarity gets grouped under a shared `near_dupe_group_id`, using a union find structure so that if A is similar to B and B is similar to C, all three land in one group even though A and C were never directly compared.
+
+Both steps work at the custodian level on purpose. If two different custodians each happen to hold a copy of the same email, both copies survive, because who had a document is itself relevant in a real case. Only duplicates inside the same custodian's own collection get suppressed.
+
+### Why it matters
+
+Document review is usually billed per document, so cutting duplicates before a human ever opens a file is a direct cost saving, not just tidiness. The real lesson from building this module is that exact and near duplicate detection solve two genuinely different problems, and you need both, never just one.
+
+### Result
+
+```
+============================================================
+DEDUPLICATION SUMMARY
+============================================================
+Total documents:                10076
+Exact duplicates flagged:       0 (0.0%)
+Near-duplicate groups found:    2017
+Documents in a near-dupe group: 7574 (75.2%)
+============================================================
+
+lay-k: 5937 docs, 0 exact dupes, 4631 near-dupes
+skilling-j: 4139 docs, 0 exact dupes, 2943 near-dupes
+```
+
+![Deduplication summary run against the real corpus](docs/screenshots/Deduplication.png)
+
+### Real data quality findings
+
+Zero exact duplicates looked wrong at first glance. The same email visibly exists in more than one folder of Kenneth Lay's mailbox (his `_sent`, `sent` and `all_documents` folders all mirror each other), so exact hash matching should have caught at least some of that.
+
+Pulling the raw headers of two folder copies of the same email explained it. Same sender, same date, same subject, same body, but a different `Message-ID` on each copy, and a different `X-Folder` value:
+
+```
+data/raw/lay-k/_sent/1..eml          Message-ID: <18133935.1075840283210...>  X-Folder: ...'sent
+data/raw/lay-k/all_documents/46..eml Message-ID: <29550756.1075840201886...> X-Folder: ...All documents
+```
+
+Whatever tool originally exported this corpus from the custodians' Lotus Notes mailboxes assigned a fresh, unique Message-ID to every folder copy of the same email. That means the raw bytes never match between copies, so MD5 based exact dedup is structurally blind to this kind of duplication here, even though a human reviewer would call these the same document on sight. That is exactly the gap near duplicate detection exists to close, and it is why the near-dupe pass caught 75 percent of the corpus, well above what you would expect from genuine forwards and replies alone.
 
 ---
 

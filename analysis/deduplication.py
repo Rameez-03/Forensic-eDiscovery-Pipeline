@@ -143,6 +143,18 @@ def print_summary(total_docs: int, exact_count: int, near_dupe_groups: int, near
     print(f"Documents in a near-dupe group: {near_dupe_docs} ({near_dupe_docs / total_docs:.1%})")
     print("=" * 60)
 
+def summary_by_custodian(conn) -> None:
+    rows = conn.execute(
+        "SELECT custodian, "
+        "COUNT(*) AS total, "
+        "SUM(is_duplicate) AS exact_dupes, "
+        "SUM(near_dupe_group_id IS NOT NULL) AS near_dupes "
+        "FROM documents GROUP BY custodian"
+    ).fetchall()
+    for row in rows:
+        print(f"{row['custodian']}: {row['total']} docs, "
+              f"{row['exact_dupes']} exact dupes, {row['near_dupes']} near-dupes")
+
 
 def run_deduplication(db_path: Path = None) -> None:
     conn = get_connection(db_path) if db_path else get_connection()
@@ -152,6 +164,7 @@ def run_deduplication(db_path: Path = None) -> None:
     near_groups, near_docs = flag_near_duplicates(conn)
 
     print_summary(total_docs, exact_count, near_groups, near_docs)
+    summary_by_custodian(conn)
     conn.close()
 
 
