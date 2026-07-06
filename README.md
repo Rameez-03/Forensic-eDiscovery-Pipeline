@@ -28,7 +28,7 @@ For this build I extracted two custodians from the full corpus:
 | 0 | Concepts and glossary | Complete |
 | 1 | Ingestion and metadata extraction | Complete |
 | 2 | Deduplication | Complete |
-| 3 | Email threading | Planned |
+| 3 | Email threading | Complete |
 | 4 | Keyword search | Planned |
 | 5 | Privilege detection | Planned |
 | 6 | Production export | Planned |
@@ -157,6 +157,57 @@ data/raw/lay-k/all_documents/46..eml Message-ID: <29550756.1075840201886...> X-F
 ```
 
 Whatever tool originally exported this corpus from the custodians' Lotus Notes mailboxes assigned a fresh, unique Message-ID to every folder copy of the same email. That means the raw bytes never match between copies, so MD5 based exact dedup is structurally blind to this kind of duplication here, even though a human reviewer would call these the same document on sight. That is exactly the gap near duplicate detection exists to close, and it is why the near-dupe pass caught 75 percent of the corpus, well above what you would expect from genuine forwards and replies alone.
+
+---
+
+## Module 3: Email Threading
+
+### What it does
+
+Module 3 reads `forensic.db` and reconstructs conversation threads, writing a `thread_id` to every document. The code is in [`analysis/email_threading.py`](analysis/email_threading.py). Two passes run in sequence.
+
+**Pass 1 — In-Reply-To.** Every email carries a `Message-ID` header: a unique identifier stamped by the sending mail server. When a recipient hits Reply, their client writes an `In-Reply-To` header containing the `Message-ID` of the email they are replying to. Pass 1 builds a lookup table of all `Message-ID` values in the corpus, then for each document walks its `In-Reply-To` chain upward until reaching a document with no parent. That ancestor is the thread root. Every document in the chain gets the same `thread_id` (`TH-{root_doc_id}`). If an `In-Reply-To` reference points to a Message-ID not in the corpus, the chain is broken (the parent was sent by someone outside the two custodians or was never collected). The current document is treated as the root for its branch rather than being discarded.
+
+**Pass 2 — Subject-line fallback.** Any document still sitting as a solo thread after Pass 1 gets a second chance. The base subject is extracted by stripping `Re:`, `Fwd:`, and similar prefixes repeatedly until none remain, then lowercasing the result. Documents with the same base subject (minimum ten characters, to filter out generic one-word subjects) are grouped together, with the earliest document in the group as the thread root. This pass exists because the Enron corpus was exported from Lotus Notes, which does not write RFC 822 `In-Reply-To` headers on export. Pass 1 found zero matches in this corpus. All 1,664 multi-email threads in the result came from Pass 2.
+
+Threading is cross-custodian by design. A conversation between `lay-k` and `skilling-j` belongs in one thread, not two. This is the opposite of deduplication, which runs at the custodian level because who held a document is forensically significant. Path compression is used in the root-resolution step so each document is traced at most once regardless of chain depth, the same technique used in Module 2's union find grouping.
+
+### Why it matters
+
+Threading is one of the highest-visibility features in a real review platform. Reviewers in Relativity and Nuix read documents in thread view by default, because a single reply makes no sense without the email it is responding to. Producing documents without threading context is a common source of dispute between parties.
+
+Two design decisions are worth explaining.
+
+Threading is cross-custodian. Unlike deduplication, a conversation does not fragment just because its participants live in different custodian folders. The goal of threading is to reconstruct what actually happened, and conversations happen across people.
+
+Broken chains are treated as roots, not errors. In a two-custodian subset of a 600,000-email corpus, many replies will reference a parent that was never collected. Silently discarding those documents would misrepresent the corpus. Treating them as thread roots preserves them while accurately reflecting that their parent context is missing.
+
+### Result
+
+```
+============================================================
+THREADING SUMMARY
+============================================================
+Total documents:                10076
+Total threads:                  4664
+  Multi-email threads:          1664
+    via In-Reply-To:            0
+    via subject-line fallback:  1664
+  Single-email threads:         3000
+Cross-custodian threads:        129
+Orphaned replies:               0
+Largest thread:                 1124 emails
+  Root subject: Demand Ken Lay Donate Proceeds from Enron Stock Sales
+============================================================
+lay-k: 5937 docs, 2458 threads
+skilling-j: 4139 docs, 2335 threads
+```
+
+### Real data quality findings
+
+**Zero In-Reply-To headers confirms the Lotus Notes export did not preserve the RFC 822 threading standard.** The result is not just that some chains are broken or that parents are missing from the corpus. There are no `In-Reply-To` headers in the dataset at all. The export tool never wrote them. That means the first threading pass is structurally inapplicable to this corpus, and subject-line fallback is the only method that can produce any threading output. This is a known limitation of Lotus Notes-sourced collections and is exactly the kind of platform-specific artefact a forensic technology analyst is expected to identify and document before a review begins.
+
+**The largest thread is a 1,124-email mass campaign, not a conversation.** "Demand Ken Lay Donate Proceeds from Enron Stock Sales" is a form letter campaign: members of the public, angry about Lay's stock sales before Enron's collapse, sent near-identical inbound emails all sharing the same subject line. Subject-line threading faithfully grouped all 1,124 of them together under one `thread_id`. A reviewer who encountered this in a real matter would apply bulk review handling: open one representative document, confirm the group is non-responsive inbound mail, and tag the entire thread in a single action. If these 1,124 emails were reviewed individually, the cost would be the same as reviewing an entire custodian's collection for what is effectively one document repeated at scale. It is also a reminder that subject-line threading groups by shared subject, not by shared conversation: a high document count on a thread is a prompt to inspect the group, not an automatic sign that something significant happened there.
 
 ---
 
