@@ -1,0 +1,26 @@
+# Enron FERC Investigation — keyword search terms
+# One term per line. Lines beginning with # are comments.
+# Terms are matched case-insensitively against subject and body text.
+
+# Special purpose entities at the centre of the accounting fraud
+raptor
+ljm
+chewco
+jedi
+whitewing
+
+# Key practices under scrutiny
+mark-to-market
+mark to market
+broadband
+
+# Legal and privilege indicators
+confidential
+attorney
+privileged
+settlement
+
+# Financial actions
+stock sale
+bonus
+severance

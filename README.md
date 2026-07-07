@@ -29,7 +29,7 @@ For this build I extracted two custodians from the full corpus:
 | 1 | Ingestion and metadata extraction | Complete |
 | 2 | Deduplication | Complete |
 | 3 | Email threading | Complete |
-| 4 | Keyword search | Planned |
+| 4 | Keyword search | Complete |
 | 5 | Privilege detection | Planned |
 | 6 | Production export | Planned |
 | 6B | DSAR response generator | Planned |
@@ -208,6 +208,77 @@ skilling-j: 4139 docs, 2335 threads
 **Zero In-Reply-To headers confirms the Lotus Notes export did not preserve the RFC 822 threading standard.** The result is not just that some chains are broken or that parents are missing from the corpus. There are no `In-Reply-To` headers in the dataset at all. The export tool never wrote them. That means the first threading pass is structurally inapplicable to this corpus, and subject-line fallback is the only method that can produce any threading output. This is a known limitation of Lotus Notes-sourced collections and is exactly the kind of platform-specific artefact a forensic technology analyst is expected to identify and document before a review begins.
 
 **The largest thread is a 1,124-email mass campaign, not a conversation.** "Demand Ken Lay Donate Proceeds from Enron Stock Sales" is a form letter campaign: members of the public, angry about Lay's stock sales before Enron's collapse, sent near-identical inbound emails all sharing the same subject line. Subject-line threading faithfully grouped all 1,124 of them together under one `thread_id`. A reviewer who encountered this in a real matter would apply bulk review handling: open one representative document, confirm the group is non-responsive inbound mail, and tag the entire thread in a single action. If these 1,124 emails were reviewed individually, the cost would be the same as reviewing an entire custodian's collection for what is effectively one document repeated at scale. It is also a reminder that subject-line threading groups by shared subject, not by shared conversation: a high document count on a thread is a prompt to inspect the group, not an automatic sign that something significant happened there.
+
+---
+
+## Module 4: Keyword Search
+
+### What it does
+
+Module 4 searches every document in `forensic.db` for a configurable list of search terms and records which terms matched in a new `keyword_hits` column, in [`analysis/keyword_search.py`](analysis/keyword_search.py). Terms are loaded from [`config/search_terms.txt`](config/search_terms.txt) — one term per line, with `#` for comments — so the list can be updated and the search re-run without touching any code.
+
+For each document, the subject and body text are concatenated and searched for every term using a case-insensitive substring match. If any terms match, their names are stored as a comma-separated list in `keyword_hits`. If none match, `keyword_hits` stays `NULL`. That `NULL` vs non-`NULL` distinction is the review cut line: documents with hits enter the review queue, documents without hits are culled.
+
+Matching is inclusive by design. Substring matching means `raptor` hits `Raptor transaction` and `raptor vehicles`. In a real first-pass keyword review, the goal is to avoid missing a relevant document. False positives (non-relevant documents that happen to contain a search term) are expected and are handled downstream by human review. False negatives (relevant documents that were never surfaced) are the problem you are trying to prevent.
+
+### Why it matters
+
+Document review is typically billed per document, at rates between £20 and £200 per document depending on the platform and reviewer seniority. Keyword search is the primary cost-control mechanism at the processing stage. Running 20 terms against 10,076 documents cut the review universe from 10,076 to 2,102 — an 80% reduction before a human reviewer opens anything.
+
+The keyword list itself is a legal deliverable. In litigation, both parties negotiate and agree on search terms before review begins. A term that was not on the agreed list cannot typically be used to argue relevance later. Writing a keyword list is therefore not a technical task: it is a forensic and legal judgement about what the investigation is actually looking for.
+
+### Result
+
+```
+============================================================
+KEYWORD SEARCH SUMMARY
+============================================================
+Total documents:                10076
+Documents with keyword hits:    2102 (20.9%)
+Documents without hits:         7974 (79.1%)
+
+Hits per keyword (sorted by frequency):
+  stock sale                 1125  ########################################
+  confidential                460  ################
+  broadband                   340  ############
+  privileged                  215  #######
+  attorney                     90  ###
+  settlement                   42  #
+  bonus                        39  #
+  severance                    36  #
+  ljm                          21  
+  jedi                           9  
+  chewco                         4  
+  mark-to-market                 4  
+  raptor                         3  
+  whitewing                      1  
+  mark to market                 1  
+
+By custodian:
+  lay-k: 1574/5937 hits (26.5%)
+  skilling-j: 528/4139 hits (12.8%)
+
+Top 5 documents by keywords matched:
+  [ljm, chewco, broadband, settlement]
+    Saturday Articles
+  [broadband, confidential, bonus]
+    REMOVE FROM E-MAIL LIST!!! Re: BusinessWeek's
+  [confidential, attorney, privileged]
+    Re: Lawsuit
+  [broadband, confidential, bonus]
+    REMOVE FROM E-MAIL LIST!!! Re: BusinessWeek's
+  [confidential, attorney, privileged]
+    Re: Lawsuit
+============================================================
+```
+
+### Real data quality findings
+
+**The "stock sale" spike is Module 3's mass campaign in disguise.** "stock sale" returned 1,125 hits — more than half the entire review universe on its own. Cross-referencing with the threading results from Module 3 reveals why: the 1,124-email public campaign ("Demand Ken Lay Donate Proceeds from Enron Stock Sales") contains the phrase "stock sale" in every message. A flat keyword hit count looks significant until it is checked against thread structure. In a real matter, that entire thread would be bulk-tagged non-responsive as inbound public mail, and the remaining "stock sale" hits would need to be re-evaluated against a much smaller baseline. This is why keyword metrics are always reviewed alongside threading and deduplication data, not in isolation.
+
+**The SPE terms are almost silent.** `raptor` returned 3 hits. `chewco` returned 4. `ljm` returned 21. These are the entities at the centre of the Enron accounting fraud. The near-absence of these terms in a two-custodian collection covering the Chairman and CEO is not absence of evidence — it means the people who actually controlled those vehicles (CFO Andrew Fastow and his team) are not in this collection. A forensic technology analyst would flag this immediately: the keyword results are telling you who else needs to be added as a custodian.
+
+**Duplicate documents appear in the top results.** "REMOVE FROM E-MAIL LIST" and "Re: Lawsuit" each appear twice in the top 5. Both Lay and Skilling held a copy of each email, and both copies survived Module 2's deduplication because cross-custodian duplicates are kept by design. Without awareness of that deduplication behaviour, a reviewer might count the same document twice when reporting hit volumes to the case team.
 
 ---
 
