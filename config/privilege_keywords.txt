@@ -1,0 +1,27 @@
+# Privilege-indicating keywords
+# Matched case-insensitively in subject and body text.
+# These are phrases that signal a document may be protected by
+# attorney-client privilege or the work product doctrine.
+
+# Direct privilege claims
+privileged and confidential
+attorney-client privilege
+attorney client privilege
+without prejudice
+
+# Work product
+work product
+
+# Counsel references
+outside counsel
+general counsel
+legal counsel
+in-house counsel
+legal advice
+legal opinion
+
+# Litigation indicators
+litigation hold
+legal hold
+do not forward
+do not distribute

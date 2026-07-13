@@ -1,0 +1,13 @@
+# Known attorney email domains for the Enron matter
+# One domain per line, # for comments.
+# Any document where the sender or any recipient has an address
+# at one of these domains is flagged as potentially privileged.
+
+# Vinson & Elkins — Enron's primary outside counsel
+velaw.com
+
+# Other firms that worked on Enron-related matters
+skadden.com
+kirkland.com
+milbank.com
+weil.com

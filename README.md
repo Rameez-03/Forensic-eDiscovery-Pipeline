@@ -30,7 +30,7 @@ For this build I extracted two custodians from the full corpus:
 | 2 | Deduplication | Complete |
 | 3 | Email threading | Complete |
 | 4 | Keyword search | Complete |
-| 5 | Privilege detection | Planned |
+| 5 | Privilege detection | Complete |
 | 6 | Production export | Planned |
 | 6B | DSAR response generator | Planned |
 | 6C | AI assisted review summary | Planned |
@@ -279,6 +279,63 @@ Top 5 documents by keywords matched:
 **The SPE terms are almost silent.** `raptor` returned 3 hits. `chewco` returned 4. `ljm` returned 21. These are the entities at the centre of the Enron accounting fraud. The near-absence of these terms in a two-custodian collection covering the Chairman and CEO is not absence of evidence — it means the people who actually controlled those vehicles (CFO Andrew Fastow and his team) are not in this collection. A forensic technology analyst would flag this immediately: the keyword results are telling you who else needs to be added as a custodian.
 
 **Duplicate documents appear in the top results.** "REMOVE FROM E-MAIL LIST" and "Re: Lawsuit" each appear twice in the top 5. Both Lay and Skilling held a copy of each email, and both copies survived Module 2's deduplication because cross-custodian duplicates are kept by design. Without awareness of that deduplication behaviour, a reviewer might count the same document twice when reporting hit volumes to the case team.
+
+---
+
+## Module 5: Privilege Detection
+
+### What it does
+
+Module 5 scans every document in `forensic.db` for indicators of attorney-client privilege or work product protection, in [`output/privilege_log.py`](output/privilege_log.py). Two detection methods run in combination.
+
+**Attorney domain matching.** The sender and every recipient address field (`To`, `Cc`, `Bcc`) are checked against a list of known law firm domains in [`config/attorney_domains.txt`](config/attorney_domains.txt). Any document where a lawyer's address appears in the correspondence is flagged as Attorney-Client Privilege. This is the primary indicator used in practice: the mere presence of outside counsel on an email thread is what creates the privilege claim, not the content.
+
+**Keyword matching.** Subject and body text are scanned for phrases from [`config/privilege_keywords.txt`](config/privilege_keywords.txt) — terms like `"privileged and confidential"`, `"outside counsel"`, `"work product"`, `"legal advice"`. Documents that match on keywords alone, without a known attorney domain present, are flagged as Potentially Privileged. This is deliberately over-inclusive: it requires human review to confirm, but avoids missing a document that references an attorney domain not in the config file.
+
+For every flagged document, `is_privileged` is set to `1` and the privilege basis is written to the `review_tag` column in `forensic.db`. Running the module resets all previous flags before re-scanning, so updating the config files and re-running gives a clean result.
+
+The module also generates [`PRIVILEGE_LOG.md`](PRIVILEGE_LOG.md) — a formal record of every withheld document including item ID, custodian, date, sender, recipients, subject description, and privilege basis.
+
+### Why it matters
+
+Privilege review is one of the highest-stakes steps in e-discovery. Producing a privileged document to opposing counsel — even accidentally — can constitute a waiver of the privilege, potentially making the entire subject matter of that communication discoverable. Getting this wrong is a serious professional and legal risk.
+
+Two aspects of the design reflect how this works in practice.
+
+The privilege log is a real legal deliverable. When documents are withheld, opposing counsel receives the log instead of the documents themselves. They can challenge any entry on the log if they believe the privilege claim is not valid. The log has to be detailed enough to allow that challenge without revealing the protected content.
+
+The detection is over-inclusive by design. In real review, it is safer to flag too many documents and have a human confirm than to miss a genuine privilege claim. The 114 Potentially Privileged documents in this corpus require manual triage — some will be confirmed, some will be cleared. That triage is a normal part of privilege review.
+
+### Result
+
+```
+============================================================
+PRIVILEGE DETECTION SUMMARY
+============================================================
+Total documents:                10076
+Privileged / withheld:          261 (2.6%)
+Cleared for review:             9815 (97.4%)
+
+By privilege basis:
+  Potentially Privileged              114
+  Attorney-Client Privilege           110
+  Work Product                         37
+
+By custodian:
+  lay-k: 212/5937 (3.6%)
+  skilling-j: 49/4139 (1.2%)
+
+Privilege log written to: PRIVILEGE_LOG.md
+============================================================
+```
+
+### Real data quality findings
+
+**Attorney correspondence is confirmed in the corpus.** The 110 Attorney-Client Privilege flags came from real law firm domains appearing in the sender and recipient fields — at least one of the domains in [`config/attorney_domains.txt`](config/attorney_domains.txt) was active in Lay and Skilling's correspondence. Vinson and Elkins (`velaw.com`) was Enron's primary outside counsel and advised on the Raptor transactions specifically, so their presence in Lay's mailbox is exactly what you would expect. These documents would be withheld in a real production and listed on the privilege log; opposing counsel would likely move to compel disclosure of the Raptor-related communications given their central role in the fraud allegations.
+
+**Lay's privilege rate is three times Skilling's (3.6% vs 1.2%).** As Chairman, Lay was the one engaging outside counsel on board-level matters: the stock sales, SEC disclosure obligations, and fiduciary duties that the FERC investigation centred on. Skilling's role was more operational. The asymmetry is not noise — it maps directly to the difference in their legal exposure at the time these emails were written.
+
+**A 2.6% privilege rate is within the expected range for real matters.** Privilege rates in corporate e-discovery typically run between 1% and 5% of the corpus. Substantially higher rates usually indicate an over-broad keyword list. The 114 Potentially Privileged documents are the over-inclusive portion of the result and would require human review to sort genuine privilege claims from false positives — documents where someone wrote "privileged and confidential" in an email header as a matter of habit rather than actual legal protection.
 
 ---
 
