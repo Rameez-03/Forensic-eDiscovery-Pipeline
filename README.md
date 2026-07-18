@@ -31,11 +31,11 @@ For this build I extracted two custodians from the full corpus:
 | 3 | Email threading | Complete |
 | 4 | Keyword search | Complete |
 | 5 | Privilege detection | Complete |
-| 6 | Production export | Planned |
-| 6B | DSAR response generator | Planned |
-| 6C | AI assisted review summary | Planned |
-| 7 | Windows artefact / DFIR parser | Planned |
-| 8 | Streamlit review dashboard | Planned |
+| 6 | Production export | Complete |
+| 6B | DSAR response generator | Planned (extension) |
+| 6C | AI assisted review summary | Planned (extension) |
+| 7 | Windows artefact / DFIR parser | Complete |
+| 8 | Streamlit review dashboard | Complete |
 
 ---
 
@@ -43,17 +43,29 @@ For this build I extracted two custodians from the full corpus:
 
 ```powershell
 # 1. Install dependencies
-pip install rapidfuzz python-evtx streamlit pandas jinja2 reportlab
+pip install rapidfuzz python-evtx streamlit pandas
 
 # 2. Download the Enron corpus and extract one or more custodian
 #    folders into data/raw/<custodian>/..., renaming each file to end in .eml
 #    (the original archive ships files with no extension, e.g. "5.")
+#    Source: https://www.cs.cmu.edu/~enron/
 
-# 3. Run ingestion
-python -m ingestion.email_parser
+# 3. Run the full pipeline in order
+python -m ingestion.email_parser       # Module 1: ingest and hash all .eml files
+python -m analysis.deduplication       # Module 2: flag exact and near-duplicate documents
+python -m analysis.email_threading     # Module 3: reconstruct conversation threads
+python -m analysis.keyword_search      # Module 4: search against config/search_terms.txt
+python -m output.privilege_log         # Module 5: detect privilege, write PRIVILEGE_LOG.md
+python -m output.production_export     # Module 6: export responsive set to production/VOL001/
+
+# 4. Launch the review dashboard
+streamlit run dashboard/app.py
+
+# 5. (Optional) Parse Windows Event Logs for DFIR investigation
+python -m artefacts.evtx_parser --path C:/Windows/System32/winevt/Logs/Security.evtx
 ```
 
-This creates `forensic.db` (SQLite) and appends to `CHAIN_OF_CUSTODY.md`.
+Each module is also independently re-runnable. Modules 4 and 5 reset their own flags on re-run, so updating `config/search_terms.txt` or `config/privilege_keywords.txt` and re-running gives a clean result without needing to re-ingest.
 
 ---
 
@@ -339,6 +351,136 @@ Privilege log written to: PRIVILEGE_LOG.md
 
 ---
 
+## Module 6: Production Export
+
+### What it does
+
+Module 6 is the final stage of the core EDRM pipeline. It queries `forensic.db` for every document that is non-duplicate, non-privileged, and responsive (has at least one keyword hit), assigns each a sequential Bates number, and writes the production set to [`production/VOL001/`](production/VOL001/), in [`output/production_export.py`](output/production_export.py).
+
+**Bates numbering** is the standard document identification scheme in litigation. Each produced document gets a unique sequential identifier (`ENRON-000001`, `ENRON-000002`, ...) that is permanently attached and referenced in any later proceedings — depositions, court filings, expert reports. The number is how both parties refer to a specific document throughout the case.
+
+Two files are written:
+
+**`METADATA.csv`** — the load file. A structured CSV mapping Bates numbers to document metadata (custodian, dates, sender, recipients, subject, thread ID, keyword hits, file hash, file path). This format is importable directly into review platforms like Relativity and Nuix, which is how the produced documents would be loaded into an opposing counsel's review environment.
+
+**`VOLUME_SUMMARY.md`** — the formal production record. Documents what was included and what was excluded at each stage, with counts for duplicates removed, documents withheld as privileged, and documents culled for lack of keyword hits. This is a deliverable in its own right: it accompanies the production and accounts for every document in the original corpus.
+
+### Why it matters
+
+Production is where the pipeline becomes a legal act. Everything produced under this volume number is now formally part of the case record. Documents in the load file can be cited by Bates number in depositions. Documents that should have been produced but were not — whether through a broken deduplication step, an over-broad privilege claim, or a misconfigured keyword list — can result in sanctions, adverse inference instructions, or court-ordered re-production.
+
+Every exclusion decision made in Modules 2 through 5 is accounted for in the volume summary. That audit trail from ingestion (Module 1) through to production (Module 6) is what makes the pipeline defensible in a real matter.
+
+### Result
+
+```
+============================================================
+PRODUCTION EXPORT SUMMARY
+============================================================
+Total corpus:                   10076
+Documents produced:             2032 (20.2%)
+Bates range:                    ENRON-000001 to ENRON-002032
+
+By custodian:
+  lay-k:      1542 documents
+  skilling-j:  490 documents
+
+Output:
+  production/VOL001/METADATA.csv
+  production/VOL001/VOLUME_SUMMARY.md
+============================================================
+```
+
+### Real data quality findings
+
+**The pipeline reduced 10,076 documents to a production set of 2,032 — an 80% reduction.** The exclusions break down as: 0 exact duplicates removed (the corpus-level deduplication finding from Module 2), 261 withheld as privileged, and 7,783 culled as not responsive (no keyword hits). Every exclusion decision is documented in [`production/VOL001/VOLUME_SUMMARY.md`](production/VOL001/VOLUME_SUMMARY.md) and can be defended if opposing counsel challenges the production scope.
+
+**Lay's production volume is three times Skilling's (1,542 vs 490).** The same asymmetry appeared in the keyword search and privilege results. As Chairman, Lay generated more correspondence on the topics the investigation is focused on. In a real matter this disparity would inform the case team's theory: Lay was more directly involved in the communications that matter, either as the primary decision-maker or as the recipient of information Skilling routed through him.
+
+---
+
+## Module 6B: DSAR Response Generator (Extension)
+
+A Data Subject Access Request (DSAR) is a right under GDPR and similar data protection legislation: any individual can request that an organisation provide all personal data it holds about them. This extension module would take a data subject's name or email address, query the corpus for every document in which they appear as sender or recipient, and generate a formatted report of the results.
+
+Unlike the core e-discovery pipeline (which is driven by the investigation team), a DSAR response is driven by an individual's legal rights and operates under strict statutory deadlines. The data subject receives a copy of relevant personal data rather than a privilege-filtered production. This module is planned as a demonstration that the same structured pipeline can serve both litigation and regulatory compliance use cases.
+
+---
+
+## Module 6C: AI Assisted Review Summary (Extension)
+
+This extension module would use the Claude API to assist with the human review step that sits between keyword search and final production decisions. For documents with multiple keyword hits — the subset most likely to be genuinely relevant — it would generate a one-sentence relevance summary and a suggested review tag (Responsive, Non-Responsive, Needs Review) for each document, writing the results back to `forensic.db`.
+
+Technology Assisted Review (TAR) and predictive coding are among the most commercially significant capabilities in the e-discovery market, with platforms like Relativity charging substantial premiums for AI-assisted review features. This module is planned as a demonstration of how a small language model integration changes the economics of first-pass review. It is currently omitted to avoid API costs during development.
+
+---
+
+## Module 7: Windows Artefact Parser / DFIR
+
+### What it does
+
+Module 7 operates independently of the email pipeline. It parses Windows Event Log files (`.evtx` format) and extracts forensically significant events into a structured JSON timeline, in [`artefacts/evtx_parser.py`](artefacts/evtx_parser.py). This represents the DFIR (Digital Forensics and Incident Response) track of the project — the same structured methodology applied to system artefacts rather than email.
+
+The parser targets seven event IDs that are of consistent interest in forensic investigations:
+
+| Event ID | Description | Why it matters |
+|---|---|---|
+| 4624 | Successful Logon | Establishes who was active on the system and when |
+| 4625 | Failed Logon | Repeated failures can indicate brute force attempts |
+| 4634 | Logoff | Brackets a user's active session |
+| 4648 | Logon with Explicit Credentials | Runas or lateral movement indicator |
+| 4688 | Process Created | What executables ran, and from what parent process |
+| 4698 | Scheduled Task Created | Common persistence mechanism |
+| 7045 | Service Installed | Common persistence mechanism |
+
+Events are extracted from the raw XML record format used by Windows Event Log, sorted chronologically, and written to `artefacts/forensic_timeline.json`. The timeline can then be imported into a SIEM or reviewed directly.
+
+### Why it matters
+
+The two most common starting points for a DFIR investigation are email (did someone communicate about this?) and Windows Event Logs (what did the system record?). This module handles the second track. Event ID 4688 (process creation) and 4648 (logon with explicit credentials) are the two most commonly cited events in incident reports because they show what ran and whether an attacker moved laterally between machines.
+
+The approach here — parse raw artefacts, extract structured events, write a timeline — is the same workflow an analyst would follow manually in tools like Eric Zimmerman's Timeline Explorer or Velociraptor, just scripted rather than GUI-driven.
+
+### Usage
+
+```powershell
+# Point at the Windows Security event log
+python -m artefacts.evtx_parser --path C:/Windows/System32/winevt/Logs/Security.evtx
+
+# Or parse an entire directory of .evtx files
+python -m artefacts.evtx_parser --path C:/path/to/evtx/folder/
+```
+
+Output is written to `artefacts/forensic_timeline.json`.
+
+---
+
+## Module 8: Streamlit Review Dashboard
+
+### What it does
+
+Module 8 is a five-page interactive Streamlit application that makes the pipeline's output browsable and queryable without writing SQL, in [`dashboard/app.py`](dashboard/app.py). It reads directly from `forensic.db` and reflects the current state of the database each time it loads.
+
+**Overview** — headline metrics row (total documents, unique threads, keyword hits, privileged count, duplicates), custodian breakdown table, pipeline module status, and a year-by-year document distribution chart.
+
+**Documents** — filterable document table. Filter by custodian, privilege status, and keyword hit presence. Text search across subject and sender fields. Displays all metadata columns from the pipeline.
+
+**Threads** — conversation explorer. Selects any multi-email thread from a dropdown and renders each email in the thread as an expandable card in chronological order, showing sender, recipients, body text, keyword hits, and privilege status in context.
+
+**Keywords** — keyword frequency bar chart showing how many documents each search term matched, plus a custodian hit rate comparison table.
+
+**Privilege** — privilege log viewer. Metric tiles by privilege basis. Filterable by basis and custodian. Displays the full list of withheld documents with their privilege classification.
+
+### Usage
+
+```powershell
+streamlit run dashboard/app.py
+```
+
+The app opens in a browser at `http://localhost:8501`.
+
+---
+
 ## Tech Stack
 
 | Layer | Tool | Why |
@@ -346,7 +488,7 @@ Privilege log written to: PRIVILEGE_LOG.md
 | Language | Python 3.12 | Industry standard for forensic scripting |
 | Email parsing | `email` (stdlib) | Built in RFC 822 / MIME support, nothing hidden in a third party library |
 | Database | SQLite (`sqlite3`) | Lightweight, one file, no server needed |
-| Fuzzy matching | `rapidfuzz` | Used for near duplicate detection in Module 2 |
+| Fuzzy matching | `rapidfuzz` | Near duplicate detection in Module 2 |
 | EVTX parsing | `python-evtx` | Windows Event Log parsing in Module 7 |
-| Dashboard | `streamlit` | Review UI in Module 8 |
-| Data handling | `pandas` | Metadata analysis and export |
+| Dashboard | `streamlit` | Interactive review UI in Module 8 |
+| Data handling | `pandas` | Tabular data display in the dashboard |
